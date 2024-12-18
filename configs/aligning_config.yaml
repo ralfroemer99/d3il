@@ -17,7 +17,7 @@ hydra:
 
 # insert wandb here
 wandb:
-  entity: atalaydonat
+  entity: ralf-roemer
   project: d3il
 
 group: aligning_${agent_name}
