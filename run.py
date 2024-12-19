@@ -1,4 +1,4 @@
-import os
+import sys
 import logging
 import random
 
@@ -8,6 +8,41 @@ import numpy as np
 import wandb
 from omegaconf import DictConfig, OmegaConf
 import torch
+
+TRAIN = False
+SIM = True
+
+# Default arguments
+default_args = [
+    "run.py",
+    "--config-name=aligning_config",      # aligning
+    "--multirun",
+    "seed=0",
+    "agents=ddpm_agent",
+    "agent_name=ddpm",
+    "window_size=1",
+    "group=aligning_ddpm_seeds_0.25data",
+    "simulation.n_cores=1",
+    "simulation.n_contexts=2",
+    "simulation.n_trajectories_per_context=8",
+    "agents.model.model.t_dim=8",
+    "agents.model.n_timesteps=24",
+    # "--config-name=avoiding_config",        # avoiding
+    # "--multirun",
+    # "seed=0",
+    # "agents=ddpm_agent",
+    # "agent_name=ddpm",
+    # "window_size=1",
+    # "group=avoiding_ddpm_seeds",
+    # "simulation.n_cores=1",
+    # "simulation.n_trajectories=10",
+    # "agents.model.model.t_dim=24",
+    # "agents.model.n_timesteps=4",
+]
+
+# Use default arguments if none are provided
+if len(sys.argv) == 1:  # If no arguments are passed
+    sys.argv = default_args
 
 
 log = logging.getLogger(__name__)
@@ -51,15 +86,22 @@ def main(cfg: DictConfig) -> None:
     )
 
     agent = hydra.utils.instantiate(cfg.agents)
+    
     # train the agent
-    agent.train_agent()
+    if TRAIN:
+        agent.train_agent()
 
     # load the model performs best on the evaluation set
-    agent.load_pretrained_model(agent.working_dir, sv_name=agent.eval_model_name)
+    if SIM:
+        if TRAIN:
+            agent.load_pretrained_model(agent.working_dir, sv_name=agent.eval_model_name)
+        else:
+            agent.load_pretrained_model('/home/ralf_roemer/Projects/d3il/logs/aligning/sweeps/ddpm/2024-12-19/16-29-15/agent_name=ddpm,agents.model.model.t_dim=8,agents.model.n_timesteps=24,agents=ddpm_agent,group=aligning_ddpm_seeds_0.25data,seed=0,simulation.n_contexts=1,simulation.n_cores=1,simulation.n_trajectories_per_context=8,window_size=1', 
+                                        sv_name=agent.eval_model_name)
 
-    # simulate the model
-    env_sim = hydra.utils.instantiate(cfg.simulation)
-    env_sim.test_agent(agent)
+        # simulate the model
+        env_sim = hydra.utils.instantiate(cfg.simulation)
+        env_sim.test_agent(agent)
 
     log.info("done")
 

@@ -1,3 +1,4 @@
+# n_cores: 5, n_contexts: 60, n_trajectories_per_context: 8, seed: 0,1,2,3,4,5
 python run.py --config-name=aligning_config \
               --multirun seed=0,1,2,3,4,5 \
               agents=ddpm_encdec \

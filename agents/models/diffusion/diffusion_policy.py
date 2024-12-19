@@ -210,7 +210,6 @@ class Diffusion(nn.Module):
         batch_size = state.shape[0]
         if len(state.shape) == 3:
             shape = (batch_size, self.model.action_seq_len, self.action_dim)
-            # shape = (batch_size, state.shape[1], self.action_dim)
         else:
             shape = (batch_size, self.action_dim)
         action = self.p_sample_loop(state, goal, shape, *args, **kwargs)

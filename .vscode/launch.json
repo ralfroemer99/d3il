@@ -1,0 +1,30 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+    
+        {
+            "name": "Python Debugger: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            // "args": [
+            //     "--config-name=aligning_config",
+            //     "--multirun",
+            //     "seed=0",
+            //     "agents=ddpm_agent",
+            //     "agent_name=ddpm",
+            //     "window_size=1",
+            //     "group=aligning_ddpm_seeds_0.25data",
+            //     "simulation.n_cores=1",
+            //     "simulation.n_contexts=1",
+            //     "simulation.n_trajectories_per_context=8",
+            //     "agents.model.model.t_dim=8",
+            //     "agents.model.n_timesteps=24"
+            // ]
+        }
+    ]
+}
