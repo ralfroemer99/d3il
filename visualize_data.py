@@ -7,7 +7,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from omegaconf import DictConfig, OmegaConf
 
-exp = 'avoiding'
+exp = 'sorting'
 
 ee_position_indices = {
     'avoiding': [2, 3],
@@ -18,7 +18,7 @@ ee_position_indices = {
 }
 
 # Default arguments
-config_name = f"{exp}_config"
+config_name = f"{exp}_config" if exp != 'sorting' else 'sorting_2_config'
 
 # Default arguments
 default_args = [
@@ -59,16 +59,21 @@ def main(cfg: DictConfig) -> None:
     if exp == 'avoiding':
         observations = agent.trainset.observations
         actions = agent.trainset.actions
+        masks = agent.trainset.masks.bool()
     else:
         observations = torch.cat((agent.trainset.observations, agent.valset.observations))
         actions = torch.cat((agent.trainset.actions, agent.valset.actions))
+        masks = torch.cat((agent.trainset.masks, agent.valset.masks)).bool()
 
     # Plot
     fig, ax = plt.subplots(1, 1, figsize=(10, 10))
-    if exp in ['aligning', 'pushing', 'sorting']:
-        for _ in range(observations.shape[0]):
-            ax.plot(observations[_, :, ee_position_indices[exp][0]], observations[_, :, ee_position_indices[exp][1]])
+    plot_all = False
+    n_plot = 50
+    n_plot = observations.shape[0] if plot_all else n_plot
+    for _ in range(n_plot):
+        ax.plot(observations[_, masks[_], ee_position_indices[exp][0]], observations[_, masks[_], ee_position_indices[exp][1]])
 
+    ax.set_title(f'{exp}')
     plt.show()
 
 if __name__ == "__main__":

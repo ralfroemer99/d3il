@@ -12,7 +12,7 @@ model:
   device: ${device}
 
   model:
-    _target_: agents.models.diffusion.diffusion_policy.Diffusion
+    _target_: agents.models.diffusion.gc_diffusion.Diffusion
     _recursive_: false
 
     state_dim: 128 #${obs_dim}

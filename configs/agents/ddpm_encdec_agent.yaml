@@ -5,7 +5,7 @@ action_seq_size: 4
 obs_seq_len: 5
 
 model:
-  _target_: agents.models.diffusion.diffusion_policy.Diffusion    # exactly the same as agents.models.diffusion.gc_diffusion.Diffusion
+  _target_: agents.models.diffusion.gc_diffusion.Diffusion    # exactly the same as agents.models.diffusion.gc_diffusion.Diffusion
   _recursive_: false
 
   state_dim: ${obs_dim}

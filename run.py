@@ -9,35 +9,42 @@ import wandb
 from omegaconf import DictConfig, OmegaConf
 import torch
 
-TRAIN = False
+TRAIN = True
 SIM = True
 
 # Default arguments
 default_args = [
     "run.py",
-    "--config-name=aligning_config",      # aligning
-    "--multirun",
-    "seed=0",
-    "agents=ddpm_agent",
-    "agent_name=ddpm",
-    "window_size=1",
-    "group=aligning_ddpm_seeds_0.25data",
-    "simulation.n_cores=1",
-    "simulation.n_contexts=2",
-    "simulation.n_trajectories_per_context=8",
-    "agents.model.model.t_dim=8",
-    "agents.model.n_timesteps=24",
-    # "--config-name=avoiding_config",        # avoiding
+    # "--config-name=aligning_config",      # aligning
     # "--multirun",
     # "seed=0",
     # "agents=ddpm_agent",
     # "agent_name=ddpm",
     # "window_size=1",
+    # "group=aligning_ddpm_seeds_0.25data",
+    # "simulation.n_cores=1",
+    # "simulation.n_contexts=2",
+    # "simulation.n_trajectories_per_context=8",
+    # "agents.model.model.t_dim=8",
+    # "agents.model.n_timesteps=24",
+    "--config-name=avoiding_config",        # avoiding
+    "--multirun",
+    "seed=0",
+    # "window_size=1",
+    # "agents=ddpm_agent",
+    # "agent_name=ddpm",
     # "group=avoiding_ddpm_seeds",
     # "simulation.n_cores=1",
     # "simulation.n_trajectories=10",
     # "agents.model.model.t_dim=24",
     # "agents.model.n_timesteps=4",
+    "window_size=8",
+    "agents=ddpm_encdec_agent",
+    "agent_name=ddpm_encdec",
+    "group=avoiding_ddpm_encdec_seeds",
+    "simulation.n_cores=1",
+    "simulation.n_trajectories=10",
+    "agents.model.n_timesteps=16",
 ]
 
 # Use default arguments if none are provided
