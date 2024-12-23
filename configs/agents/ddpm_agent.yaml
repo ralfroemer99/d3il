@@ -31,8 +31,8 @@ model:
 
 optimization:
   _target_: torch.optim.Adam
-  lr: 1e-3 # for transformer
-#  lr: 5e-4 # for MLP
+  # lr: 1e-3 # for transformer
+  lr: 5e-4 # for MLP
   weight_decay: 0
 
 #optimization:

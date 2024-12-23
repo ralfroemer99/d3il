@@ -22,6 +22,7 @@ class Avoiding_Dataset(TrajectoryDataset):
             action_dim: int = 2,
             max_len_data: int = 256,
             window_size: int = 1,
+            action_space: str = 'vel',
     ):
 
         super().__init__(
@@ -32,6 +33,7 @@ class Avoiding_Dataset(TrajectoryDataset):
             max_len_data=max_len_data,
             window_size=window_size
         )
+        self.action_space = action_space
 
         logging.info("Loading Sorting Dataset")
 
@@ -60,7 +62,12 @@ class Avoiding_Dataset(TrajectoryDataset):
             valid_len = len(vel_state)
 
             zero_obs[0, :valid_len, :] = input_state[:-1]
-            zero_action[0, :valid_len, :] = vel_state
+            if self.action_space == 'vel':
+                zero_action[0, :valid_len, :] = vel_state
+            elif self.action_space == 'pos':
+                zero_action[0, :valid_len, :] = robot_des_pos[1:]
+            else:
+                zero_action[0, :valid_len, :] = np.concatenate((vel_state, robot_des_pos[1:]), axis=-1)
             zero_mask[0, :valid_len] = 1
 
             inputs.append(zero_obs)

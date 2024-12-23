@@ -30,14 +30,6 @@ default_args = [
     "--config-name=avoiding_config",        # avoiding
     "--multirun",
     "seed=0",
-    # "window_size=1",
-    # "agents=ddpm_agent",
-    # "agent_name=ddpm",
-    # "group=avoiding_ddpm_seeds",
-    # "simulation.n_cores=1",
-    # "simulation.n_trajectories=10",
-    # "agents.model.model.t_dim=24",
-    # "agents.model.n_timesteps=4",
     "window_size=8",
     "agents=ddpm_encdec_agent",
     "agent_name=ddpm_encdec",
@@ -45,6 +37,15 @@ default_args = [
     "simulation.n_cores=1",
     "simulation.n_trajectories=10",
     "agents.model.n_timesteps=16",
+    # "window_size=1",
+    # "agents=ddpm_agent",
+    # "agent_name=ddpm",
+    # "group=avoiding_ddpm_seeds",
+    # "simulation.n_cores=1",
+    # "simulation.n_trajectories=10",
+    # "agents.model.n_timesteps=10",
+    "action_dim=2",
+    "action_space=vel",
 ]
 
 # Use default arguments if none are provided
@@ -103,7 +104,7 @@ def main(cfg: DictConfig) -> None:
         if TRAIN:
             agent.load_pretrained_model(agent.working_dir, sv_name=agent.eval_model_name)
         else:
-            agent.load_pretrained_model('/home/ralf_roemer/Projects/d3il/logs/aligning/sweeps/ddpm/2024-12-19/16-29-15/agent_name=ddpm,agents.model.model.t_dim=8,agents.model.n_timesteps=24,agents=ddpm_agent,group=aligning_ddpm_seeds_0.25data,seed=0,simulation.n_contexts=1,simulation.n_cores=1,simulation.n_trajectories_per_context=8,window_size=1', 
+            agent.load_pretrained_model('/home/ralf/projects/d3il/logs/avoiding/sweeps/ddpm_encdec/2024-12-23/15-25-59/action_dim=2,action_space=vel,agent_name=ddpm_encdec,agents.model.n_timesteps=16,agents=ddpm_encdec_agent,group=avoiding_ddpm_encdec_seeds,seed=0,simulation.n_cores=1,simulation.n_trajectories=10,window_size=8', 
                                         sv_name=agent.eval_model_name)
 
         # simulate the model

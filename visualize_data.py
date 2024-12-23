@@ -58,11 +58,9 @@ def main(cfg: DictConfig) -> None:
     
     if exp == 'avoiding':
         observations = agent.trainset.observations
-        actions = agent.trainset.actions
         masks = agent.trainset.masks.bool()
     else:
         observations = torch.cat((agent.trainset.observations, agent.valset.observations))
-        actions = torch.cat((agent.trainset.actions, agent.valset.actions))
         masks = torch.cat((agent.trainset.masks, agent.valset.masks)).bool()
 
     # Plot

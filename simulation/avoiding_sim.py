@@ -7,6 +7,8 @@ from envs.gym_avoiding_env.gym_avoiding.envs.avoiding import ObstacleAvoidanceEn
 import numpy as np
 import torch
 import wandb
+import matplotlib
+import matplotlib.pyplot as plt
 
 from simulation.base_sim import BaseSim
 
@@ -24,11 +26,13 @@ class Avoiding_Sim(BaseSim):
             device: str,
             render: bool,
             n_cores: int = 1,
-            n_trajectories: int = 30
+            n_trajectories: int = 30,
+            action_space: str = 'vel',
     ):
         super().__init__(seed, device, render, n_cores)
 
         self.n_trajectories = n_trajectories
+        self.action_space = action_space
 
     def eval_agent(self, agent, n_trajectories, mode_encoding, successes, robot_c_pos, pid, cpu_set):
 
@@ -60,8 +64,17 @@ class Avoiding_Sim(BaseSim):
 
                 obs = np.concatenate((pred_action[:2], obs))
 
-                pred_action = agent.predict(obs)
-                pred_action = pred_action[0] + obs[:2]
+                if self.action_space == 'vel':
+                    pred_vel = agent.predict(obs)
+                elif self.action_space == 'pos':
+                    pred_vel = agent.predict(obs) - obs[:2]
+                else:
+                    pred_vel = agent.predict(obs)[:, 2:]
+
+                # pred_action = agent.predict(obs)
+                # pred_action = pred_action + obs[:2]
+                
+                pred_action = pred_vel[0] + obs[:2]
 
                 pred_action = np.concatenate((pred_action, fixed_z, [0, 1, 0, 0]), axis=0)
 
@@ -84,7 +97,7 @@ class Avoiding_Sim(BaseSim):
 
         log.info('Starting trained model evaluation')
 
-        robot_c_pos = torch.zeros([self.n_trajectories, 150, 2]).share_memory_()
+        robot_c_pos = torch.zeros([self.n_trajectories, 251, 2]).share_memory_()
 
         mode_encoding = torch.zeros([self.n_trajectories, 9]).share_memory_()
         successes = torch.zeros(self.n_trajectories).share_memory_()
@@ -123,8 +136,7 @@ class Avoiding_Sim(BaseSim):
         else:
             self.eval_agent(agent, self.n_trajectories, mode_encoding, successes, robot_c_pos, 0, set([0]))
             
-        # TODO: save robot_c_pos
-
+        np.save(f"{self.working_dir}/robot_c_pos.npy", robot_c_pos.numpy())
         success_rate = torch.mean(successes).item()
 
         # calculate entropy
@@ -140,5 +152,18 @@ class Avoiding_Sim(BaseSim):
 
         print(f'Successrate {success_rate}')
         print(f'entropy {entropy}')
+
+        # Plot trajectories
+        fig, ax = plt.subplots(1, 1, figsize=(10, 10))
+        for i in range(self.n_trajectories):
+            traj_length = torch.sum(robot_c_pos[i, :, 0] != 0)
+            ax.plot(robot_c_pos[i, :traj_length, 0], robot_c_pos[i, :traj_length, 1])
+        ax.set_xlim([0.2, 0.8])
+        ax.set_ylim([-0.3, 0.4])
+        centers = [[0.5, -0.1], [0.425, 0.08], [0.575, 0.08], [0.35, 0.26], [0.5, 0.26], [0.65, 0.26]]
+        for center in centers:
+            ax.add_patch(matplotlib.patches.Circle(center, 0.025, color='r'))
+        ax.plot([0.2, 0.8], [0.35, 0.35], color=[0.4, 1, 0.4], linewidth=5)
+        plt.savefig(f"{self.working_dir}/trajectories.png")
 
         return successes, entropy
