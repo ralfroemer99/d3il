@@ -27,7 +27,7 @@ class BaseAgent(abc.ABC):
         device: str = 'cpu',
         epoch: int = 100,
         scale_data: bool = True,
-        eval_every_n_epochs: int = 50
+        eval_every_n_epochs: int = 50,
     ):
 
         self.model = hydra.utils.instantiate(model).to(device)

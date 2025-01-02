@@ -46,8 +46,8 @@ train_batch_size: 1024
 val_batch_size: 1024
 num_workers: 4
 device: 'cpu'
-epoch: 4
-eval_every_n_epochs: 2
+epoch: 10
+eval_every_n_epochs: 1
 scale_data: True
 
 # Environment
@@ -81,4 +81,4 @@ simulation:
   render: True
   n_cores: 1
   n_contexts: 1
-  n_trajectories_per_context: 8
+  n_trajectories_per_context: 10

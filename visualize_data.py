@@ -7,7 +7,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from omegaconf import DictConfig, OmegaConf
 
-exp = 'sorting'
+print(torch.cuda.is_available())
+
+exp = 'avoiding'
 
 ee_position_indices = {
     'avoiding': [2, 3],

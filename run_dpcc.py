@@ -15,7 +15,7 @@ SIM = True
 # Default arguments
 default_args = [
     "run.py",
-    # "--config-name=aligning_config",            # aligning
+    # "--config-name=aligning_config",            # aligning/home/ralf/Projects/d3il/logs/avoiding/sweeps/ddpm_encdec/2025-01-02/21-39-17/action_dim=2,action_space=pos,agent_name=ddpm_encdec,agents.action_seq_size=4,agents.model.model.action_seq_len=8,agents.model.model.obs_seq_len=1,agents.obs_seq_len=1,agents=ddpm_encdec_agent,group=avoiding_ddpm_encdec,seed=0,window_size=8/home/ralf/Projects/d3il/logs/avoiding/sweeps/ddpm_encdec/2025-01-02/21-39-17/action_dim=2,action_space=pos,agent_name=ddpm_encdec,agents.action_seq_size=4,agents.model.model.action_seq_len=8,agents.model.model.obs_seq_len=1,agents.obs_seq_len=1,agents=ddpm_encdec_agent,group=avoiding_ddpm_encdec,seed=0,window_size=8
     # "--multirun",
     # "window_size=10",
     # "group=ddpm_encdec",
@@ -31,8 +31,13 @@ default_args = [
     "--multirun",
     "window_size=8",                          # obs_seq_len + act_seq_len - 1
     "group=avoiding_ddpm_encdec",
+    "agents.model.model.action_seq_len=8",
+    "agents.model.model.obs_seq_len=1",
+    "agents.obs_seq_len=1",
+    "agents.action_seq_size=4",
+    # "agents.optimization.lr=1e-4",
     "action_dim=2",
-    "action_space=vel",
+    "action_space=pos",
     # For all
     "seed=0",
     "agents=ddpm_encdec_agent",
@@ -64,13 +69,6 @@ def set_seed_everywhere(seed):
 @hydra.main(config_path="configs", config_name="avoiding_config.yaml")
 def main(cfg: DictConfig) -> None:
 
-    # if cfg.seed in [0, 1]:
-    #     os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-    # elif cfg.seed in [2, 3]:
-    #     os.environ["CUDA_VISIBLE_DEVICES"] = "1"
-    # elif cfg.seed in [4, 5]:
-    #     os.environ["CUDA_VISIBLE_DEVICES"] = "2"
-
     set_seed_everywhere(cfg.seed)
 
     # init wandb logger and config from hydra path
@@ -95,7 +93,7 @@ def main(cfg: DictConfig) -> None:
         if TRAIN:
             agent.load_pretrained_model(agent.working_dir, sv_name=agent.eval_model_name)
         else:
-            agent.load_pretrained_model('/home/ralf/Projects/d3il/logs/avoiding/sweeps/ddpm_encdec/2025-01-02/13-15-53/action_dim=2,action_space=vel,agent_name=ddpm_encdec,agents=ddpm_encdec_agent,group=avoiding_ddpm_encdec,seed=0,window_size=8', 
+            agent.load_pretrained_model('/home/ralf/Projects/d3il/logs/avoiding/sweeps/ddpm_encdec/2025-01-02/21-39-17/action_dim=2,action_space=pos,agent_name=ddpm_encdec,agents.action_seq_size=4,agents.model.model.action_seq_len=8,agents.model.model.obs_seq_len=1,agents.obs_seq_len=1,agents=ddpm_encdec_agent,group=avoiding_ddpm_encdec,seed=0,window_size=8', 
                                         sv_name=agent.eval_model_name)
 
         # simulate the model

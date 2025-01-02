@@ -1,11 +1,11 @@
 _target_: agents.ddpm_encdec_agent.DiffusionAgent
 _recursive_: false
 
-action_seq_size: 4
 obs_seq_len: 5
+action_seq_size: 4
 
 model:
-  _target_: agents.models.diffusion.gc_diffusion.Diffusion    # exactly the same as agents.models.diffusion.gc_diffusion.Diffusion
+  _target_: agents.models.diffusion.gc_diffusion_projected.Diffusion
   _recursive_: false
 
   state_dim: ${obs_dim}
@@ -92,7 +92,7 @@ model:
 
 optimization:
   _target_: torch.optim.Adam
-  lr: 5e-4 # for transformer
+  lr: 1e-4 # for transformer    # 5e-4
 #  lr: 5e-4 # for MLP
   weight_decay: 0
 

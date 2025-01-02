@@ -4,70 +4,51 @@ from scipy.optimize import minimize, Bounds
 
 class Projector:
 
-    def __init__(self, horizon, transition_dim, action_dim=0, goal_dim=0, constraint_list=[], normalizer=None, variant='states', 
-                 dt=0.1, cost_dims=None, skip_initial_state=True, diffusion_timestep_threshold=0.5, gradient=False, gradient_weights=None,
-                 device='cuda', solver='proxsuite', parallelize=False):
+    def __init__(self, horizon, transition_dim, constraint_list=[], scaler=None, 
+                 dt=0.1, skip_initial=True, gradient_weights=None, device='cuda'):
         self.horizon = horizon
         self.transition_dim = transition_dim
         self.dt = torch.tensor(dt, device=device)
-        self.skip_initial_state = skip_initial_state
-        # self.only_last = only_last
-        self.diffusion_timestep_threshold = diffusion_timestep_threshold
-        self.gradient = gradient
+        self.skip_initial = skip_initial
         self.gradient_weights = gradient_weights
         self.device = device
-        self.solver = solver
-        self.parallelize = parallelize
         
         # Determine whether to include actions in the projection
-        if normalizer is None:
-            self.normalizer = None
-        elif variant == 'states':
-            self.normalizer = ProjectionNormalizer(observation_normalizer=normalizer.normalizers['observations'], goal_dim=goal_dim)
-        elif variant == 'states_actions':
-        # elif transition_dim != normalizer.normalizers['observations'].maxs.size:
-            self.normalizer = ProjectionNormalizer(observation_normalizer=normalizer.normalizers['observations'], 
-                                                   action_normalizer=normalizer.normalizers['actions'], goal_dim=goal_dim)
+        if scaler is None:
+            self.a_mean = np.zeros(transition_dim)
+            self.A_std = np.ones(transition_dim)
         else:
-            KeyError('Invalid variant. Choose either "states" or "states_actions".')            
+            self.a_mean = scaler.y_mean.cpu().numpy()
+            self.a_std = scaler.y_std.cpu().numpy()
 
         # Quadratic cost
-        if cost_dims is not None:
-            costs = torch.ones(transition_dim, device=self.device)
-            for idx in cost_dims:
-                costs[idx] = 1
-            self.Q = torch.diag(torch.tile(costs, (self.horizon, )))
-        else:
-            self.Q = torch.eye(transition_dim * horizon, device=self.device)
+        self.Q = torch.eye(transition_dim * horizon, device=self.device)
 
         self.A = torch.empty((0, self.transition_dim * self.horizon), device=self.device)   # Equality constraints
         self.b = torch.empty(0, device=self.device)
         self.C = torch.empty((0, self.transition_dim * self.horizon), device=self.device)   # Inequality constraints
         self.d = torch.empty(0, device=self.device)
 
-        self.safety_constraints = SafetyConstraints(horizon=horizon, transition_dim=transition_dim, normalizer=self.normalizer, 
-                                                 skip_initial_state=self.skip_initial_state, action_dim=action_dim, device=self.device)
-        self.dynamic_constraints = DynamicConstraints(horizon=horizon, transition_dim=transition_dim, normalizer=self.normalizer,
-                                                      skip_initial_state=self.skip_initial_state, dt=self.dt, device=self.device)
-        self.obstacle_constraints = ObstacleConstraints(horizon=horizon, transition_dim=transition_dim, normalizer=self.normalizer,
-                                                        skip_initial_state=self.skip_initial_state, dt=self.dt, device=self.device)
+        self.halfspace_constraints = HalfspaceConstraints(horizon=horizon, transition_dim=transition_dim, a_mean=self.a_mean, a_std=self.a_std, skip_initial=self.skip_initial, device=self.device)
+        self.dynamic_constraints = DynamicConstraints(horizon=horizon, transition_dim=transition_dim, dt=dt, a_mean=self.a_mean, a_std=self.a_std, skip_initial=self.skip_initial, device=self.device)
+        self.ellipsoidal_constraints = EllipsoidalConstraints(horizon=horizon, transition_dim=transition_dim, a_mean=self.a_mean, a_std=self.a_std, device=self.device)
 
         for constraint_spec in constraint_list:
             if constraint_spec[0] == 'deriv':
                 self.dynamic_constraints.constraint_list.append(constraint_spec)
             elif constraint_spec[0] == 'lb' or constraint_spec[0] == 'ub' or constraint_spec[0] == 'eq' or constraint_spec[0] == 'ineq':
-                self.safety_constraints.constraint_list.append(constraint_spec)
+                self.halfspace_constraints.constraint_list.append(constraint_spec)
             elif constraint_spec[0] == 'sphere_inside' or constraint_spec[0] == 'sphere_outside':
-                self.obstacle_constraints.constraint_list.append(constraint_spec)
+                self.ellipsoidal_constraints.constraint_list.append(constraint_spec)
 
-        self.safety_constraints.build_matrices()
+        self.halfspace_constraints.build_matrices()
         self.dynamic_constraints.build_matrices()
-        self.obstacle_constraints.build_matrices()
-        self.append_linear_constraint(self.safety_constraints)
+        self.ellipsoidal_constraints.build_matrices()
+        self.append_linear_constraint(self.halfspace_constraints)
         self.append_linear_constraint(self.dynamic_constraints)
         self.add_numpy_constraints()     
 
-    def project(self, trajectory, constraints=None):
+    def project(self, trajectory, state, constraints=None):
         """
             trajectory: np.ndarray of shape (batch_size, horizon, transition_dim)
             Solve an optimization problem of the form 
@@ -87,19 +68,17 @@ class Projector:
         # Cost
         r = - trajectory_reshaped @ self.Q
         r_np = r.cpu().numpy()
-        Q = self.Q_np.astype('double')
+        Q = self.Q_np
         trajectory_np = trajectory_reshaped.cpu().numpy()
 
         # Constraints
-        A = self.A_np.astype('double')
-        b = self.b_np.astype('double')
-        C = self.C_np.astype('double')
-        d = self.d_np.astype('double')
+        A = self.A_np
+        b = self.b_np
+        C = self.C_np
+        d = self.d_np
 
-        if self.skip_initial_state:
+        if self.skip_initial:
             s_0 = trajectory_reshaped[0, :self.transition_dim]
-            if self.solver == 'proxsuite' or self.solver == 'gurobi':
-                s_0 = s_0.cpu().numpy()
             counter = 0
             for constraint in self.dynamic_constraints.constraint_list:
                 if constraint[0] == 'deriv':
@@ -110,21 +89,21 @@ class Projector:
         r_np_double = r_np.astype('double')
         trajectory_np_double = trajectory_np.astype('double')
         # Constraints
-        constraints = ()
-        for constraint_idx in range(len(self.obstacle_constraints.P_list)):
-            P = self.obstacle_constraints.P_list[constraint_idx]
-            q = self.obstacle_constraints.q_list[constraint_idx]
-            v = self.obstacle_constraints.v_list[constraint_idx]
+        nlp_constraints = ()
+        for constraint_idx in range(len(self.ellipsoidal_constraints.P_list)):
+            P = self.ellipsoidal_constraints.P_list[constraint_idx]
+            q = self.ellipsoidal_constraints.q_list[constraint_idx]
+            v = self.ellipsoidal_constraints.v_list[constraint_idx]
             for t in range(1, self.horizon):                        # Obstacle constraints
                 start_idx = t * self.transition_dim
                 end_idx = (t + 1) * self.transition_dim
-                constraints += ({'type': 'ineq', 'fun': lambda x, start_idx=start_idx, end_idx=end_idx, P=P, q=q, v=v: -x[start_idx: end_idx] @ P @ x[start_idx: end_idx] - q @ x[start_idx: end_idx] + v,
+                nlp_constraints += ({'type': 'ineq', 'fun': lambda x, start_idx=start_idx, end_idx=end_idx, P=P, q=q, v=v: -x[start_idx: end_idx] @ P @ x[start_idx: end_idx] - q @ x[start_idx: end_idx] + v,
                                     'jac': lambda x, start_idx=start_idx, end_idx=end_idx, P=P, q=q: np.concatenate([np.zeros(start_idx), -2 * P @ x[start_idx: end_idx] - q, np.zeros(len(x) - end_idx)])},)
 
         if C.size > 0:
-            constraints += ({'type': 'ineq', 'fun': lambda x: -C @ x + d, 'jac': lambda x: -C},)
+            nlp_constraints += ({'type': 'ineq', 'fun': lambda x: -C @ x + d, 'jac': lambda x: -C},)
         if A.size > 0:
-            constraints += ({'type': 'eq', 'fun': lambda x: A @ x - b, 'jac': lambda x: A},)   
+            nlp_constraints += ({'type': 'eq', 'fun': lambda x: A @ x - b, 'jac': lambda x: A},)   
         
         projection_costs = np.ones(batch_size, dtype=np.float32)
         sol_np = np.zeros((batch_size, self.horizon * self.transition_dim), dtype=np.float32)
@@ -134,7 +113,7 @@ class Projector:
             jac_cost_fun = lambda x: Q @ x + r_np_double[i]
             res = minimize(fun=cost_fun, 
                             x0=trajectory_np_double[i],
-                            constraints=constraints, 
+                            constraints=nlp_constraints, 
                             method='SLSQP', 
                             jac=jac_cost_fun, 
                             bounds=Bounds(-5 * np.ones_like(trajectory_np_double[i]), 5 * np.ones_like(trajectory_np_double[i])),
@@ -169,7 +148,7 @@ class Projector:
         # Constraints
         A, b, C, d = self.A, self.b, self.C, self.d
 
-        if self.skip_initial_state:
+        if self.skip_initial:
             s_0 = trajectory_reshaped[0, :self.transition_dim]
             counter = 0
             for constraint in self.dynamic_constraints.constraint_list:
@@ -189,10 +168,10 @@ class Projector:
 
         # Obstacle constraints
         grad3 = np.zeros_like(trajectory_np)
-        for constraint_idx in range(len(self.obstacle_constraints.P_list)):
-            P = self.obstacle_constraints.P_list[constraint_idx]
-            q = self.obstacle_constraints.q_list[constraint_idx]
-            v = self.obstacle_constraints.v_list[constraint_idx]
+        for constraint_idx in range(len(self.ellipsoidal_constraints.P_list)):
+            P = self.ellipsoidal_constraints.P_list[constraint_idx]
+            q = self.ellipsoidal_constraints.q_list[constraint_idx]
+            v = self.ellipsoidal_constraints.v_list[constraint_idx]
             for t in range(1, self.horizon):
                 start_idx = t * self.transition_dim
                 end_idx = (t + 1) * self.transition_dim
@@ -215,26 +194,29 @@ class Projector:
         self.d = torch.cat([self.d, constraint.d], dim=0)
         self.A = torch.cat([self.A, constraint.A], dim=0)
         self.b = torch.cat([self.b, constraint.b], dim=0)
-        if constraint.__class__.__name__ == 'SafetyConstraints':
+        if constraint.__class__.__name__ == 'HalfspaceConstraints':
             self.A_safe, self.b_safe, self.C_safe, self.d_safe = constraint.A, constraint.b, constraint.C, constraint.d
         elif constraint.__class__.__name__ == 'DynamicConstraints':
             self.A_dyn, self.b_dyn, self.C_dyn, self.d_dyn = constraint.A, constraint.b, constraint.C, constraint.d
 
     def add_numpy_constraints(self):
-        self.A_np = self.A.cpu().numpy()
-        self.b_np = self.b.cpu().numpy()     
-        self.C_np = self.C.cpu().numpy()
-        self.d_np = self.d.cpu().numpy()
-        self.Q_np = self.Q.cpu().numpy()
+        self.A_np = self.A.cpu().numpy().astype('double')
+        self.b_np = self.b.cpu().numpy().astype('double')     
+        self.C_np = self.C.cpu().numpy().astype('double')
+        self.d_np = self.d.cpu().numpy().astype('double')
+        self.Q_np = self.Q.cpu().numpy().astype('double')
 
 
 class Constraints:
 
-    def __init__(self, horizon, transition_dim, normalizer=None, device='cuda'):
+    def __init__(self, horizon, transition_dim, a_mean, a_std, device='cuda'):
         self.horizon = horizon
         self.transition_dim = transition_dim
-        self.normalizer = normalizer
+        self.a_mean = a_mean
+        self.a_std = a_std
         self.device = device
+
+        self.constraint_list = []
 
         self.A = torch.empty((0, self.transition_dim * self.horizon), device=device)
         self.b = torch.empty(0, device=device)
@@ -244,13 +226,11 @@ class Constraints:
     def build_matrices(self):
         pass
 
-class SafetyConstraints(Constraints):
+class HalfspaceConstraints(Constraints):
 
-    def __init__(self, skip_initial_state=True, action_dim=0, *args, **kwargs):
+    def __init__(self, skip_initial=True, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.skip_initial_state = skip_initial_state
-        self.action_dim = action_dim
-        self.constraint_list = []
+        self.skip_initial = skip_initial
         
     def build_matrices(self, constraint_list=None):
         """
@@ -288,13 +268,13 @@ class SafetyConstraints(Constraints):
                         mat_append[t, t * self.transition_dim + dim] = sign
                         vec_append[t] = sign * bound[dim]
                         
-                    if self.normalizer is not None:
-                        x_min = self.normalizer.mins[dim]
-                        x_max = self.normalizer.maxs[dim]
+                    if self.scaler is not None:
+                        x_min = self.scaler.mins[dim]
+                        x_max = self.scaler.maxs[dim]
                         mat_append = mat_append * (x_max - x_min) / 2
                         vec_append = vec_append - sign * (x_min + x_max) / 2
 
-                    if self.skip_initial_state and dim >= self.action_dim:
+                    if self.skip_initial and dim >= self.action_dim:
                         mat_append = mat_append[1:]
                         vec_append = vec_append[1:]
 
@@ -307,9 +287,9 @@ class SafetyConstraints(Constraints):
             vec_append = torch.zeros(self.horizon, device=self.device)
 
             for i in range(self.horizon):
-                if self.normalizer is not None:
-                    x_min = self.normalizer.mins
-                    x_max = self.normalizer.maxs
+                if self.scaler is not None:
+                    x_min = self.scaler.mins
+                    x_max = self.scaler.maxs
 
                     # Unnormalize the constraints. TODO: Extend to actions by checking if dim <= action_dim
                     # We have Cs <= d, where s is the unnormalized state vector. This is converted to C's_n <= d', where s_n is the normalized state vector,
@@ -323,7 +303,7 @@ class SafetyConstraints(Constraints):
                 mat_append[i, i * self.transition_dim: (i + 1) * self.transition_dim] = torch.tensor(a, device=self.device)
                 vec_append[i] = torch.tensor(b, device=self.device)
 
-            if self.skip_initial_state:
+            if self.skip_initial:
                 mat_append = mat_append[1:]
                 vec_append = vec_append[1:]
 
@@ -335,11 +315,10 @@ class SafetyConstraints(Constraints):
                 self.d = torch.cat((self.d, vec_append), dim=0)         
 
 class DynamicConstraints(Constraints):
-    def __init__(self, skip_initial_state=True, dt=0.02, *args, **kwargs):
+    def __init__(self, dt=0.02, skip_initial=True, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.skip_initial_state = skip_initial_state
         self.dt = dt
-        self.constraint_list = []
+        self.skip_initial = skip_initial
         
     def build_matrices(self, constraint_list=None):
         """
@@ -370,17 +349,17 @@ class DynamicConstraints(Constraints):
                 vec_append = torch.zeros(self.horizon - 1, device=self.device)
 
                 # Calculate multiplicative factors needed for normalization
-                if self.normalizer is not None: 
-                    x_min = self.normalizer.mins[x_idx]
-                    x_max = self.normalizer.maxs[x_idx]
-                    dx_min = self.normalizer.mins[dx_idx]
-                    dx_max = self.normalizer.maxs[dx_idx]
+                if self.scaler is not None: 
+                    x_min = self.scaler.mins[x_idx]
+                    x_max = self.scaler.maxs[x_idx]
+                    dx_min = self.scaler.mins[dx_idx]
+                    dx_max = self.scaler.maxs[dx_idx]
                     x_diff = x_max - x_min
                     dx_diff = dx_max - dx_min
                     dx_sum = dx_max + dx_min
 
                 for i in range(self.horizon - 1):
-                    if self.normalizer is not None:
+                    if self.scaler is not None:
                         mat_append[i, i * self.transition_dim + x_idx] = 1 * x_diff
                         mat_append[i, i * self.transition_dim + dx_idx] = self.dt * dx_diff
                         mat_append[i, (i + 1) * self.transition_dim + x_idx] = -1 * x_diff
@@ -391,7 +370,7 @@ class DynamicConstraints(Constraints):
                         mat_append[i, (i + 1) * self.transition_dim + x_idx] = -1
                         vec_append[i] = 0
 
-                if self.skip_initial_state:     # --> Do that in the projection method because it needs the current state. For that, record the relevant rows
+                if self.skip_initial:     # --> Do that in the projection method because it needs the current state. For that, record the relevant rows
                     mat_fix_initial = torch.zeros(1, self.transition_dim * self.horizon, device=self.device)    # Fix the initial state
                     mat_fix_initial[0, x_idx] = 1
                     mat_append = torch.cat((mat_fix_initial, mat_append), dim=0)
@@ -400,18 +379,15 @@ class DynamicConstraints(Constraints):
                 self.A = torch.cat((self.A, mat_append), dim=0)
                 self.b = torch.cat((self.b, vec_append), dim=0)
 
-class ObstacleConstraints(Constraints):
-    def __init__(self, skip_initial_state=True, dt=0.02, *args, **kwargs):
+class EllipsoidalConstraints(Constraints):
+    def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.skip_initial_state = skip_initial_state
-        self.dt = dt
-        self.constraint_list = []
 
     def build_matrices(self, constraint_list=None):
         """
             Input:
                 constraint_list: list of constraints
-                    e.g. [('sphere_inside', [0, 2] [-1, 5], 1), ('sphere_outside', [1, 3], [0, 1], 4)] -->
+                    e.g. [('sphere_inside', [0, 2], [-1, 5], 1), ('sphere_outside', [1, 3], [0, 1], 4)] -->
                     (x_0 + 1)^2 + (x_2 - 5)^2 <= 1, x_1^2 + (x_3 - 1)^2 >= 4
                     where x_i is the i-th dimension of the state or state-action vectors at time t
             Generate the matrix P and the vector q for:
@@ -435,23 +411,28 @@ class ObstacleConstraints(Constraints):
             center = constraint[2]
             radius = constraint[3]
 
-            P = np.zeros((self.transition_dim, self.transition_dim))
-            q = np.zeros(self.transition_dim)
-            v = radius ** 2
+            # P = np.zeros((self.transition_dim, self.transition_dim))
+            # q = np.zeros(self.transition_dim)
+            P = np.diag(self.a_std ** 2)
+            q = 2 * self.a_std * (self.a_mean - center)
+            v = radius ** 2 - (self.a_mean - center) @ (self.a_mean - center)
 
-            dim_counter = 0
-            for dim in dims:
-                if self.normalizer is not None:
-                    delta_s = self.normalizer.maxs[dim] - self.normalizer.mins[dim]
-                    s_min = self.normalizer.mins[dim]
-                    P[dim, dim] = delta_s ** 2 / 4
-                    q[dim] = delta_s**2 / 2 + delta_s * (s_min - center[dim_counter])
-                    v -= delta_s**2 / 4 + delta_s * (s_min - center[dim_counter]) + (s_min - center[dim_counter]) ** 2
-                else:
-                    P[dim, dim] = 1
-                    q[dim] = -2 * center[dim_counter]
-                    v -= center[dim_counter] ** 2
-                dim_counter += 1
+            # dim_counter = 0
+            # for dim in dims:
+            #     P[dim, dim] = self.a_std[dim] ** 2
+            #     q[dim] = 2 * self.a_std[dim] * (self.a_mean[dim] - center[dim_counter])
+            #     v -= (self.a_mean[dim] - center[dim_counter]) ** 2
+                # if self.scaler is not None:
+                #     delta_s = self.scaler.maxs[dim] - self.scaler.mins[dim]
+                #     s_min = self.scaler.mins[dim]
+                #     P[dim, dim] = delta_s ** 2 / 4
+                #     q[dim] = delta_s**2 / 2 + delta_s * (s_min - center[dim_counter])
+                #     v -= delta_s**2 / 4 + delta_s * (s_min - center[dim_counter]) + (s_min - center[dim_counter]) ** 2
+                # else:
+                #     P[dim, dim] = 1
+                #     q[dim] = -2 * center[dim_counter]
+                #     v -= center[dim_counter] ** 2
+                # dim_counter += 1
 
             if type == 'sphere_outside':
                 P = -P
@@ -463,34 +444,3 @@ class ObstacleConstraints(Constraints):
             self.v_list.append(v)    
 
 
-class ProjectionNormalizer():
-    def __init__(self, observation_normalizer=None, action_normalizer=None, goal_dim=0):
-        self.observation_normalizer = observation_normalizer
-        self.action_normalizer = action_normalizer
-        self.goal_dim = goal_dim
-        self.get_limits()
-
-    def get_limits(self):
-        if self.observation_normalizer is not None and self.action_normalizer is not None:
-            x_max_obs = self.observation_normalizer.maxs[:-self.goal_dim] if self.goal_dim > 0 else self.observation_normalizer.maxs
-            x_min_obs = self.observation_normalizer.mins[:-self.goal_dim] if self.goal_dim > 0 else self.observation_normalizer.mins
-            x_max = np.concatenate([self.action_normalizer.maxs, x_max_obs])
-            x_min = np.concatenate([self.action_normalizer.mins, x_min_obs])
-        elif self.observation_normalizer is not None:
-            x_max = self.observation_normalizer.maxs[:-self.goal_dim] if self.goal_dim > 0 else self.observation_normalizer.maxs
-            x_min = self.observation_normalizer.mins[:-self.goal_dim] if self.goal_dim > 0 else self.observation_normalizer.mins
-        elif self.action_normalizer is not None:
-            x_max = self.action_normalizer.maxs
-            x_min = self.action_normalizer.mins
-        
-        self.maxs = x_max
-        self.mins = x_min
-
-    def normalize(self, x):
-        x_normalized = (x - self.mins) / (self.maxs - self.mins) * 2 - 1
-        return x_normalized
-    
-    def unnormalize(self, x_normalized):
-        x = (x_normalized + 1) * (self.maxs - self.mins) / 2 + self.mins
-        return x
-                

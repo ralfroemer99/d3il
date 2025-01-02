@@ -28,18 +28,31 @@ class Avoiding_Sim(BaseSim):
             n_cores: int = 1,
             n_trajectories: int = 30,
             action_space: str = 'vel',
+            obstacles: list = None
     ):
         super().__init__(seed, device, render, n_cores)
 
         self.n_trajectories = n_trajectories
-        self.action_space = action_space
 
-    def eval_agent(self, agent, n_trajectories, mode_encoding, successes, robot_c_pos, pid, cpu_set):
+        # -------- Make constraint list: Obstacles, halfspace constraints, dynamic constraints
+        self.action_space = action_space
+        self.obstacles = obstacles
+        self.constraints = []
+        if self.obstacles is not None:
+            for obs in self.obstacles:
+                x_center, y_center, radius = obs
+                if self.action_space == 'pos':
+                    self.constraints.append(['sphere_outside', [0, 1], [x_center, y_center], radius])
+                elif self.action_space == 'pos_vel':
+                    self.constraints.append(['sphere_outside', [2, 3], [x_center, y_center], radius])
+        # --------
+
+    def eval_agent(self, agent, n_trajectories, mode_encoding, successes, robot_c_pos, pid, cpu_set, ax=None):
 
         print(os.getpid(), cpu_set)
         assign_process_to_cpu(os.getpid(), cpu_set)
 
-        env = ObstacleAvoidanceEnv(render=self.render)
+        env = ObstacleAvoidanceEnv(render=self.render, obstacles=self.obstacles)
         env.start()
 
         random.seed(pid)
@@ -64,15 +77,16 @@ class Avoiding_Sim(BaseSim):
 
                 obs = np.concatenate((pred_action[:2], obs))
 
+                # -------- Arguments for the projector
+                extra_args = {'constraints': self.constraints, 'dt': 0.1, 'skip_initial': True, 'ax': ax}
+                # --------
+                agent_output = agent.predict(obs, extra_args=extra_args)
                 if self.action_space == 'vel':
-                    pred_vel = agent.predict(obs)
+                    pred_vel = agent_output
                 elif self.action_space == 'pos':
-                    pred_vel = agent.predict(obs) - obs[:2]
+                    pred_vel = agent_output - obs[:2]
                 else:
-                    pred_vel = agent.predict(obs)[:, 2:]
-
-                # pred_action = agent.predict(obs)
-                # pred_action = pred_action + obs[:2]
+                    pred_vel = agent_output[:, :2]
                 
                 pred_action = pred_vel[0] + obs[:2]
 
@@ -101,6 +115,8 @@ class Avoiding_Sim(BaseSim):
 
         mode_encoding = torch.zeros([self.n_trajectories, 9]).share_memory_()
         successes = torch.zeros(self.n_trajectories).share_memory_()
+
+        fig, ax = plt.subplots(1, 1, figsize=(10, 10))
 
         num_cpu = mp.cpu_count()
         cpu_set = list(range(num_cpu))
@@ -134,7 +150,7 @@ class Avoiding_Sim(BaseSim):
             [p.join() for p in p_list]
 
         else:
-            self.eval_agent(agent, self.n_trajectories, mode_encoding, successes, robot_c_pos, 0, set([0]))
+            self.eval_agent(agent, self.n_trajectories, mode_encoding, successes, robot_c_pos, 0, set([0]), ax)
             
         np.save(f"{self.working_dir}/robot_c_pos.npy", robot_c_pos.numpy())
         success_rate = torch.mean(successes).item()
@@ -154,16 +170,19 @@ class Avoiding_Sim(BaseSim):
         print(f'entropy {entropy}')
 
         # Plot trajectories
-        fig, ax = plt.subplots(1, 1, figsize=(10, 10))
         for i in range(self.n_trajectories):
             traj_length = torch.sum(robot_c_pos[i, :, 0] != 0)
             ax.plot(robot_c_pos[i, :traj_length, 0], robot_c_pos[i, :traj_length, 1])
         ax.set_xlim([0.2, 0.8])
         ax.set_ylim([-0.3, 0.4])
         centers = [[0.5, -0.1], [0.425, 0.08], [0.575, 0.08], [0.35, 0.26], [0.5, 0.26], [0.65, 0.26]]
-        for center in centers:
-            ax.add_patch(matplotlib.patches.Circle(center, 0.025, color='r'))
+        radii = [0.03, 0.025, 0.025, 0.025, 0.025, 0.025]
+        for i, center in enumerate(centers):
+            ax.add_patch(matplotlib.patches.Circle(center, radii[i], color='r'))
         ax.plot([0.2, 0.8], [0.35, 0.35], color=[0.4, 1, 0.4], linewidth=5)
+        for obs in self.obstacles:
+            x_center, y_center, radius = obs
+            ax.add_patch(matplotlib.patches.Circle([x_center, y_center], radius, color='b'))
         plt.savefig(f"{self.working_dir}/trajectories.png")
 
         return successes, entropy

@@ -11,8 +11,9 @@ from .utils import (cosine_beta_schedule,
                     linear_beta_schedule,
                     vp_beta_schedule,
                     extract,
-                    Losses
+                    Losses,
                     )
+from .projection import Projector
 
 
 # code adapted from https://github.com/twitter/diffusion-rl/blob/master/agents/diffusion.py
@@ -78,6 +79,8 @@ class Diffusion(nn.Module):
 
         self.diffusion_x = diffusion_x
         self.diffusion_x_M = diffusion_x_M
+
+        self.projector = None
 
     def get_params(self):
         '''
@@ -159,7 +162,7 @@ class Diffusion(nn.Module):
         nonzero_mask = (1 - (t == 0).float()).reshape(b, *((1,) * (len(x.shape) - 1)))
         return model_mean + nonzero_mask * (0.5 * model_log_variance).exp() * noise
 
-    def p_sample_loop(self, state, goal, shape, verbose=False, return_diffusion=False):
+    def p_sample_loop(self, state, goal, shape, verbose=False, return_diffusion=False, constraints=None):
         """
         Main loop for generating samples using the learned model and the inverse diffusion step
 
@@ -171,6 +174,9 @@ class Diffusion(nn.Module):
         """
         batch_size = shape[0]
         x = torch.randn(shape, device=self.device)
+        # Projection
+        if self.projector is not None:
+            x, costs = self.projector.project(x, state, constraints)
         if return_diffusion:
             diffusion = [x]
 
@@ -178,6 +184,9 @@ class Diffusion(nn.Module):
         for i in reversed(range(0, self.n_timesteps)):
             timesteps = torch.full((batch_size,), i, device=self.device, dtype=torch.long)
             x = self.p_sample(x, timesteps, state, goal)
+            # Projection
+            if self.projector is not None:
+                x, costs = self.projector.project(x, state, constraints)
             # if we want to return the complete chain add thee together
             if return_diffusion:
                 diffusion.append(x)
@@ -209,7 +218,10 @@ class Diffusion(nn.Module):
         """
         batch_size = state.shape[0]
         if len(state.shape) == 3:
-            shape = (batch_size, state.shape[1], self.action_dim)
+            if hasattr(self.model, 'action_seq_len'):
+                shape = (batch_size, self.model.action_seq_len, self.action_dim)
+            else:
+                shape = (batch_size, state.shape[1], self.action_dim)
         else:
             shape = (batch_size, self.action_dim)
         action = self.p_sample_loop(state, goal, shape, *args, **kwargs)
@@ -399,3 +411,10 @@ class Diffusion(nn.Module):
 
         action = x
         return action.clamp_(self.min_action, self.max_action)
+    
+    def create_projector(self, constraints=[], scaler=None, dt=0.1, skip_initial=True):
+        '''
+        Create a projector for the diffusion model
+        '''
+        self.projector = Projector(horizon=self.model.action_seq_len, transition_dim=self.action_dim, 
+                                   constraint_list=constraints, scaler=scaler, dt=dt, skip_initial=skip_initial)

@@ -851,7 +851,7 @@ class DiffusionEncDec(nn.Module):
             keep_last_actions: Optional[bool] = False
     ):
 
-        # actions = actions[:, self.obs_seq_len-1:, :]
+        # actions = actions[:, self.obs_seq_len-1:, :]        # Two lines initially commented out
         # states = states[:, :self.obs_seq_len, :]
 
         if len(states.size()) != 3:

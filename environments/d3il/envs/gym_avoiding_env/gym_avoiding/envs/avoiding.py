@@ -10,6 +10,8 @@ from environments.d3il.d3il_sim.sims.mj_beta.MjRobot import MjRobot
 from environments.d3il.d3il_sim.sims.mj_beta.MjFactory import MjFactory
 from environments.d3il.d3il_sim.sims import MjCamera
 
+from environments.d3il.d3il_sim.sims.universal_sim.PrimitiveObjects import Cylinder
+
 from .objects.avoiding_objects import get_obj_list, \
     init_end_eff_pos, \
     get_obj_xy_list
@@ -55,11 +57,27 @@ class ObstacleAvoidanceEnv(GymEnvWrapper):
             n_substeps: int = 35,
             max_steps_per_episode: int = 250,
             debug: bool = False,
-            render: bool = False
+            render: bool = False,
+            obstacles: list = None      # [[center_x, center_y, radius], ...]
     ):
 
         sim_factory = MjFactory()
         render_mode = Scene.RenderMode.HUMAN if render else Scene.RenderMode.BLIND
+        
+        # Add obstacles
+        if obstacles is not None:
+            for i, obs in enumerate(obstacles):
+                center_x, center_y, radius = obs
+                obj_list.append(
+                    Cylinder(name='new_obs_' + str(i),
+                    init_pos=[center_x, center_y, 0],
+                    init_quat=[1, 0, 0, 0],
+                    size=[radius, 0.07],
+                    rgba=[0, 0, 1, 1],
+                    static=True),
+                )
+            self.n_new_obs = len(obstacles)
+        
         scene = sim_factory.create_scene(
             object_list=obj_list, render=render_mode, dt=0.001
         )
@@ -214,6 +232,10 @@ class ObstacleAvoidanceEnv(GymEnvWrapper):
             return True
         elif has_collision('l3_bottom_obs', 'rod', self.scene.model, self.scene.data):
             return True
+        elif self.n_new_obs > 0:
+            for i in range(self.n_new_obs):
+                if has_collision('new_obs_' + str(i), 'rod', self.scene.model, self.scene.data):
+                    return True
         else:
             return False
 
