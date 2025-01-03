@@ -31,13 +31,13 @@ default_args = [
     "--multirun",
     "window_size=8",                          # obs_seq_len + act_seq_len - 1
     "group=avoiding_ddpm_encdec",
-    "agents.model.model.action_seq_len=8",
-    "agents.model.model.obs_seq_len=1",
-    "agents.obs_seq_len=1",
+    "agents.model.model.action_seq_len=4",
+    "agents.model.model.obs_seq_len=5",
+    "agents.obs_seq_len=5",
     "agents.action_seq_size=4",
     # "agents.optimization.lr=1e-4",
     "action_dim=2",
-    "action_space=pos",
+    "action_space=vel",
     # For all
     "seed=0",
     "agents=ddpm_encdec_agent",
@@ -93,7 +93,7 @@ def main(cfg: DictConfig) -> None:
         if TRAIN:
             agent.load_pretrained_model(agent.working_dir, sv_name=agent.eval_model_name)
         else:
-            agent.load_pretrained_model('/home/ralf/Projects/d3il/logs/avoiding/sweeps/ddpm_encdec/2025-01-02/21-39-17/action_dim=2,action_space=pos,agent_name=ddpm_encdec,agents.action_seq_size=4,agents.model.model.action_seq_len=8,agents.model.model.obs_seq_len=1,agents.obs_seq_len=1,agents=ddpm_encdec_agent,group=avoiding_ddpm_encdec,seed=0,window_size=8', 
+            agent.load_pretrained_model('/home/ralf/Projects/d3il/logs/avoiding/sweeps/ddpm_encdec/2025-01-03/12-50-35/action_dim=4,action_space=pos_vel,agent_name=ddpm_encdec,agents.action_seq_size=4,agents.model.model.action_seq_len=4,agents.model.model.obs_seq_len=5,agents.obs_seq_len=5,agents=ddpm_encdec_agent,group=avoiding_ddpm_encdec,seed=0,window_size=8', 
                                         sv_name=agent.eval_model_name)
 
         # simulate the model

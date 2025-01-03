@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+import time
 from scipy.optimize import minimize, Bounds
 
 class Projector:
@@ -8,7 +9,7 @@ class Projector:
                  dt=0.1, skip_initial=True, gradient_weights=None, device='cuda'):
         self.horizon = horizon
         self.transition_dim = transition_dim
-        self.dt = torch.tensor(dt, device=device)
+        self.dt = dt
         self.skip_initial = skip_initial
         self.gradient_weights = gradient_weights
         self.device = device
@@ -22,12 +23,12 @@ class Projector:
             self.a_std = scaler.y_std.cpu().numpy()
 
         # Quadratic cost
-        self.Q = torch.eye(transition_dim * horizon, device=self.device)
-
-        self.A = torch.empty((0, self.transition_dim * self.horizon), device=self.device)   # Equality constraints
-        self.b = torch.empty(0, device=self.device)
-        self.C = torch.empty((0, self.transition_dim * self.horizon), device=self.device)   # Inequality constraints
-        self.d = torch.empty(0, device=self.device)
+        # self.Q = np.eye(transition_dim * horizon).astype('double')
+        self.Q = np.kron(np.eye(horizon), np.diag(self.a_std ** 2)).astype('double')
+        self.A = np.empty((0, transition_dim * horizon)).astype('double')        # Equality constraints
+        self.b = np.empty(0).astype('double')
+        self.C = np.empty((0, transition_dim * horizon)).astype('double')        # Inequality constraints
+        self.d = np.empty(0).astype('double')
 
         self.halfspace_constraints = HalfspaceConstraints(horizon=horizon, transition_dim=transition_dim, a_mean=self.a_mean, a_std=self.a_std, skip_initial=self.skip_initial, device=self.device)
         self.dynamic_constraints = DynamicConstraints(horizon=horizon, transition_dim=transition_dim, dt=dt, a_mean=self.a_mean, a_std=self.a_std, skip_initial=self.skip_initial, device=self.device)
@@ -46,9 +47,9 @@ class Projector:
         self.ellipsoidal_constraints.build_matrices()
         self.append_linear_constraint(self.halfspace_constraints)
         self.append_linear_constraint(self.dynamic_constraints)
-        self.add_numpy_constraints()     
+        # self.add_numpy_constraints()     
 
-    def project(self, trajectory, state, constraints=None):
+    def project(self, trajectory, state, constraint_info=None):
         """
             trajectory: np.ndarray of shape (batch_size, horizon, transition_dim)
             Solve an optimization problem of the form 
@@ -59,26 +60,25 @@ class Projector:
                                     
         """
         
-        dims = trajectory.shape
+        trajectory = trajectory.cpu().numpy().astype('double')
+
+        batch_size, horizon, transition_dim = trajectory.shape
 
         # Reshape the trajectory to a batch of vectors (from B x H x T to B x (HT)
-        batch_size = trajectory.shape[0]
-        trajectory_reshaped = trajectory.reshape(trajectory.shape[0], -1)
+        trajectory = trajectory.reshape(trajectory.shape[0], -1)
 
         # Cost
-        r = - trajectory_reshaped @ self.Q
-        r_np = r.cpu().numpy()
-        Q = self.Q_np
-        trajectory_np = trajectory_reshaped.cpu().numpy()
+        r = - trajectory @ self.Q
+        Q = self.Q
 
         # Constraints
-        A = self.A_np
-        b = self.b_np
-        C = self.C_np
-        d = self.d_np
+        A = self.A
+        b = self.b
+        C = self.C
+        d = self.d
 
         if self.skip_initial:
-            s_0 = trajectory_reshaped[0, :self.transition_dim]
+            s_0 = trajectory[0, :self.transition_dim]
             counter = 0
             for constraint in self.dynamic_constraints.constraint_list:
                 if constraint[0] == 'deriv':
@@ -86,8 +86,6 @@ class Projector:
                     b[counter * self.horizon] = s_0[x_idx]
                     counter += 1
 
-        r_np_double = r_np.astype('double')
-        trajectory_np_double = trajectory_np.astype('double')
         # Constraints
         nlp_constraints = ()
         for constraint_idx in range(len(self.ellipsoidal_constraints.P_list)):
@@ -109,26 +107,25 @@ class Projector:
         sol_np = np.zeros((batch_size, self.horizon * self.transition_dim), dtype=np.float32)
         for i in range(batch_size):
             # Cost
-            cost_fun = lambda x: 0.5 * x @ Q @ x + r_np_double[i] @ x # + (A_double @ x - b_double) @ (A_double @ x - b_double)
-            jac_cost_fun = lambda x: Q @ x + r_np_double[i]
+            cost_fun = lambda x: 0.5 * x @ Q @ x + r[i] @ x # + (A_double @ x - b_double) @ (A_double @ x - b_double)
+            jac_cost_fun = lambda x: Q @ x + r[i]
             res = minimize(fun=cost_fun, 
-                            x0=trajectory_np_double[i],
+                            x0=trajectory[i],
                             constraints=nlp_constraints, 
                             method='SLSQP', 
                             jac=jac_cost_fun, 
-                            bounds=Bounds(-5 * np.ones_like(trajectory_np_double[i]), 5 * np.ones_like(trajectory_np_double[i])),
+                            bounds=Bounds(-5 * np.ones_like(trajectory[i]), 5 * np.ones_like(trajectory[i])),
                             tol=1e-6,
                             options={'maxiter': 1000, 'disp': False})
-
             sol_np[i] = res.x
-            projection_costs[i] = 0.5 * sol_np[i] @ Q @ sol_np[i] + r_np[i] @ sol_np[i] + 0.5 * trajectory_np[i] @ Q @ trajectory_np[i]
+            projection_costs[i] = 0.5 * sol_np[i] @ Q @ sol_np[i] + r[i] @ sol_np[i] + 0.5 * trajectory[i] @ Q @ trajectory[i]
 
             # if np.linalg.norm(A_double @ res.x - b_double) > 1e-3:
             #     print('Equality constraints not satisfied!')
             # if np.any(C_double @ res.x > d_double + 1e-3):
             #     print('Inequality constraints not satisfied!')
 
-        sol = torch.tensor(sol_np, device=self.device).reshape(dims)
+        sol = torch.tensor(sol_np, device=self.device).reshape((batch_size, horizon, transition_dim)).float()
 
         # print(f'Projection time {self.solver}:', time.time() - start_time)
         return sol, projection_costs    # only implemented for proxsuite and scipy and parallelize=False
@@ -190,21 +187,21 @@ class Projector:
         return grad1 + grad2 + grad3 
 
     def append_linear_constraint(self, constraint):
-        self.C = torch.cat([self.C, constraint.C], dim=0)
-        self.d = torch.cat([self.d, constraint.d], dim=0)
-        self.A = torch.cat([self.A, constraint.A], dim=0)
-        self.b = torch.cat([self.b, constraint.b], dim=0)
+        self.C = np.concatenate((self.C, constraint.C), axis=0)
+        self.d = np.concatenate((self.d, constraint.d), axis=0)
+        self.A = np.concatenate((self.A, constraint.A), axis=0)
+        self.b = np.concatenate((self.b, constraint.b), axis=0)
         if constraint.__class__.__name__ == 'HalfspaceConstraints':
             self.A_safe, self.b_safe, self.C_safe, self.d_safe = constraint.A, constraint.b, constraint.C, constraint.d
         elif constraint.__class__.__name__ == 'DynamicConstraints':
             self.A_dyn, self.b_dyn, self.C_dyn, self.d_dyn = constraint.A, constraint.b, constraint.C, constraint.d
 
-    def add_numpy_constraints(self):
-        self.A_np = self.A.cpu().numpy().astype('double')
-        self.b_np = self.b.cpu().numpy().astype('double')     
-        self.C_np = self.C.cpu().numpy().astype('double')
-        self.d_np = self.d.cpu().numpy().astype('double')
-        self.Q_np = self.Q.cpu().numpy().astype('double')
+    # def add_numpy_constraints(self):
+    #     self.A_np = self.A.cpu().numpy().astype('double')
+    #     self.b_np = self.b.cpu().numpy().astype('double')     
+    #     self.C_np = self.C.cpu().numpy().astype('double')
+    #     self.d_np = self.d.cpu().numpy().astype('double')
+    #     self.Q_np = self.Q.cpu().numpy().astype('double')
 
 
 class Constraints:
@@ -218,10 +215,10 @@ class Constraints:
 
         self.constraint_list = []
 
-        self.A = torch.empty((0, self.transition_dim * self.horizon), device=device)
-        self.b = torch.empty(0, device=device)
-        self.C = torch.empty((0, self.transition_dim * self.horizon), device=device)
-        self.d = torch.empty(0, device=device)
+        self.A = np.empty((0, self.transition_dim * self.horizon)).astype('double')
+        self.b = np.empty(0).astype('double')
+        self.C = np.empty((0, self.transition_dim * self.horizon)).astype('double')
+        self.d = np.empty(0).astype('double')
 
     def build_matrices(self):
         pass
@@ -260,8 +257,8 @@ class HalfspaceConstraints(Constraints):
                     if bound[dim] == -np.inf or bound[dim] == np.inf:
                         continue
                     
-                    mat_append = torch.zeros(self.horizon, self.transition_dim * self.horizon, device=self.device)
-                    vec_append = torch.zeros(self.horizon, device=self.device)
+                    mat_append = np.zeros((self.horizon, self.transition_dim * self.horizon))
+                    vec_append = np.zeros(self.horizon)
 
                     sign = 1 if type == 'ub' else -1
                     for t in range(self.horizon):
@@ -278,13 +275,13 @@ class HalfspaceConstraints(Constraints):
                         mat_append = mat_append[1:]
                         vec_append = vec_append[1:]
 
-                    self.C = torch.cat((self.C, mat_append), dim=0)
-                    self.d = torch.cat((self.d, vec_append), dim=0)
+                    self.C = np.concatenate((self.C, mat_append), axis=0)
+                    self.d = np.concatenate((self.d, vec_append), axis=0)
                 continue         
 
             # type == 'eq' or 'ineq'
-            mat_append = torch.zeros(self.horizon, self.transition_dim * self.horizon, device=self.device)
-            vec_append = torch.zeros(self.horizon, device=self.device)
+            mat_append = np.zeros((self.horizon, self.transition_dim * self.horizon))
+            vec_append = np.zeros(self.horizon)
 
             for i in range(self.horizon):
                 if self.scaler is not None:
@@ -300,19 +297,19 @@ class HalfspaceConstraints(Constraints):
                     a = bound[0]
                     b = bound[1]
                 
-                mat_append[i, i * self.transition_dim: (i + 1) * self.transition_dim] = torch.tensor(a, device=self.device)
-                vec_append[i] = torch.tensor(b, device=self.device)
+                mat_append[i, i * self.transition_dim: (i + 1) * self.transition_dim] = a
+                vec_append[i] = b
 
             if self.skip_initial:
                 mat_append = mat_append[1:]
                 vec_append = vec_append[1:]
 
             if type == 'eq':
-                self.A = torch.cat((self.A, mat_append), dim=0)
-                self.b = torch.cat((self.b, vec_append), dim=0)
+                self.A = np.concatenate((self.A, mat_append), axis=0)
+                self.b = np.concatenate((self.b, vec_append), axis=0)
             else:
-                self.C = torch.cat((self.C, mat_append), dim=0)
-                self.d = torch.cat((self.d, vec_append), dim=0)         
+                self.C = np.concatenate((self.C, mat_append), axis=0)
+                self.d = np.concatenate((self.d, vec_append), axis=0)       
 
 class DynamicConstraints(Constraints):
     def __init__(self, dt=0.02, skip_initial=True, *args, **kwargs):
@@ -340,44 +337,33 @@ class DynamicConstraints(Constraints):
         
         for constraint in constraint_list:
             type = constraint[0]
-            vals = constraint[1]
+            dims = constraint[1]
             if 'deriv' in type:
-                x_idx = int(vals[0])
-                dx_idx = int(vals[1])
+                x_idx = int(dims[0])
+                dx_idx = int(dims[1])
             
-                mat_append = torch.zeros(self.horizon - 1, self.transition_dim * self.horizon, device=self.device)
-                vec_append = torch.zeros(self.horizon - 1, device=self.device)
+                mat_append = np.zeros((self.horizon - 1, self.transition_dim * self.horizon))
+                vec_append = np.zeros(self.horizon - 1)
 
                 # Calculate multiplicative factors needed for normalization
-                if self.scaler is not None: 
-                    x_min = self.scaler.mins[x_idx]
-                    x_max = self.scaler.maxs[x_idx]
-                    dx_min = self.scaler.mins[dx_idx]
-                    dx_max = self.scaler.maxs[dx_idx]
-                    x_diff = x_max - x_min
-                    dx_diff = dx_max - dx_min
-                    dx_sum = dx_max + dx_min
+                dx_mean = self.a_mean[dx_idx]
+                x_std = self.a_std[x_idx]
+                dx_std = self.a_std[dx_idx]
 
                 for i in range(self.horizon - 1):
-                    if self.scaler is not None:
-                        mat_append[i, i * self.transition_dim + x_idx] = 1 * x_diff
-                        mat_append[i, i * self.transition_dim + dx_idx] = self.dt * dx_diff
-                        mat_append[i, (i + 1) * self.transition_dim + x_idx] = -1 * x_diff
-                        vec_append[i] = - dx_sum * self.dt
-                    else:
-                        mat_append[i, i * self.transition_dim + x_idx] = 1
-                        mat_append[i, i * self.transition_dim + dx_idx] = self.dt
-                        mat_append[i, (i + 1) * self.transition_dim + x_idx] = -1
-                        vec_append[i] = 0
+                    mat_append[i, i * self.transition_dim + x_idx] = x_std
+                    mat_append[i, i * self.transition_dim + dx_idx] = self.dt * dx_std
+                    mat_append[i, (i + 1) * self.transition_dim + x_idx] = -x_std
+                    vec_append[i] = -dx_mean * self.dt
 
-                if self.skip_initial:     # --> Do that in the projection method because it needs the current state. For that, record the relevant rows
-                    mat_fix_initial = torch.zeros(1, self.transition_dim * self.horizon, device=self.device)    # Fix the initial state
-                    mat_fix_initial[0, x_idx] = 1
-                    mat_append = torch.cat((mat_fix_initial, mat_append), dim=0)
-                    vec_append = torch.cat((torch.tensor([0], device=self.device), vec_append), dim=0)          # Must be changed to current state in each iteration!
+                # if self.skip_initial:     # --> Do that in the projection method because it needs the current state. For that, record the relevant rows
+                #     mat_fix_initial = torch.zeros(1, self.transition_dim * self.horizon, device=self.device)    # Fix the initial state
+                #     mat_fix_initial[0, x_idx] = 1
+                #     mat_append = torch.cat((mat_fix_initial, mat_append), dim=0)
+                #     vec_append = torch.cat((torch.tensor([0], device=self.device), vec_append), dim=0)          # Must be changed to current state in each iteration!
 
-                self.A = torch.cat((self.A, mat_append), dim=0)
-                self.b = torch.cat((self.b, vec_append), dim=0)
+                self.A = np.concatenate((self.A, mat_append), axis=0)
+                self.b = np.concatenate((self.b, vec_append), axis=0)
 
 class EllipsoidalConstraints(Constraints):
     def __init__(self, *args, **kwargs):
@@ -411,17 +397,18 @@ class EllipsoidalConstraints(Constraints):
             center = constraint[2]
             radius = constraint[3]
 
-            # P = np.zeros((self.transition_dim, self.transition_dim))
-            # q = np.zeros(self.transition_dim)
-            P = np.diag(self.a_std ** 2)
-            q = 2 * self.a_std * (self.a_mean - center)
-            v = radius ** 2 - (self.a_mean - center) @ (self.a_mean - center)
+            P = np.zeros((self.transition_dim, self.transition_dim))
+            q = np.zeros(self.transition_dim)
+            v = radius ** 2
+            # P = np.diag(self.a_std ** 2)
+            # q = 2 * self.a_std * (self.a_mean - center)
+            # v = radius ** 2 - (self.a_mean - center) @ (self.a_mean - center)
 
-            # dim_counter = 0
-            # for dim in dims:
-            #     P[dim, dim] = self.a_std[dim] ** 2
-            #     q[dim] = 2 * self.a_std[dim] * (self.a_mean[dim] - center[dim_counter])
-            #     v -= (self.a_mean[dim] - center[dim_counter]) ** 2
+            dim_counter = 0
+            for dim in dims:
+                P[dim, dim] = self.a_std[dim] ** 2
+                q[dim] = 2 * self.a_std[dim] * (self.a_mean[dim] - center[dim_counter])
+                v -= (self.a_mean[dim] - center[dim_counter]) ** 2
                 # if self.scaler is not None:
                 #     delta_s = self.scaler.maxs[dim] - self.scaler.mins[dim]
                 #     s_min = self.scaler.mins[dim]
@@ -432,7 +419,7 @@ class EllipsoidalConstraints(Constraints):
                 #     P[dim, dim] = 1
                 #     q[dim] = -2 * center[dim_counter]
                 #     v -= center[dim_counter] ** 2
-                # dim_counter += 1
+                dim_counter += 1
 
             if type == 'sphere_outside':
                 P = -P

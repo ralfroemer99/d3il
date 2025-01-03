@@ -28,7 +28,8 @@ class Avoiding_Sim(BaseSim):
             n_cores: int = 1,
             n_trajectories: int = 30,
             action_space: str = 'vel',
-            obstacles: list = None
+            obstacles: list = None,
+            with_constraints: bool = False
     ):
         super().__init__(seed, device, render, n_cores)
 
@@ -37,14 +38,17 @@ class Avoiding_Sim(BaseSim):
         # -------- Make constraint list: Obstacles, halfspace constraints, dynamic constraints
         self.action_space = action_space
         self.obstacles = obstacles
+        self.with_constraints = with_constraints
         self.constraints = []
-        if self.obstacles is not None:
+        if self.obstacles is not None:      # Obstacle constraints
             for obs in self.obstacles:
                 x_center, y_center, radius = obs
                 if self.action_space == 'pos':
                     self.constraints.append(['sphere_outside', [0, 1], [x_center, y_center], radius])
                 elif self.action_space == 'pos_vel':
                     self.constraints.append(['sphere_outside', [2, 3], [x_center, y_center], radius])
+        if self.action_space == 'pos_vel':
+            self.constraints.extend([['deriv', [2, 0]], ['deriv', [3, 1]]])
         # --------
 
     def eval_agent(self, agent, n_trajectories, mode_encoding, successes, robot_c_pos, pid, cpu_set, ax=None):
@@ -77,17 +81,28 @@ class Avoiding_Sim(BaseSim):
 
                 obs = np.concatenate((pred_action[:2], obs))
 
-                # -------- Arguments for the projector
-                extra_args = {'constraints': self.constraints, 'dt': 0.1, 'skip_initial': True, 'ax': ax}
-                # --------
+                # -------- Arguments for the projector --------
+                extra_args = {}
+                if self.action_space == 'pos':
+                    extra_args['plot_info'] = {'ax': ax, 'dims': [0, 1]}
+                elif self.action_space == 'pos_vel':
+                    extra_args['plot_info'] = {'ax': ax, 'dims': [2, 3]}
+                elif self.action_space == 'vel':
+                    extra_args['plot_info'] = {'ax': ax, 'integrate_vel': True}
+
+                if self.with_constraints: extra_args['constraint_info'] = {'constraints': self.constraints, 'dt': 1, 'skip_initial': True}
+                # extra_args = {'constraints': self.constraints, 'dt': 1, 'skip_initial': True, 'plot_info': plot_info} if self.with_constraints else {}
                 agent_output = agent.predict(obs, extra_args=extra_args)
                 if self.action_space == 'vel':
                     pred_vel = agent_output
                 elif self.action_space == 'pos':
                     pred_vel = agent_output - obs[:2]
-                else:
+                elif self.action_space == 'pos_vel':
                     pred_vel = agent_output[:, :2]
-                
+                else:
+                    raise ValueError('Invalid action space')
+                # --------------------------------------------
+
                 pred_action = pred_vel[0] + obs[:2]
 
                 pred_action = np.concatenate((pred_action, fixed_z, [0, 1, 0, 0]), axis=0)

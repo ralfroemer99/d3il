@@ -74,8 +74,10 @@ simulation:
   device: ${device}
   render: True
   n_cores: 1
-  n_trajectories: 1
+  n_trajectories: 5
+  # ------- Added -------------
   action_space: ${action_space}
+  with_constraints: False
   obstacles: [
-    [0.6, -0.05, 0.04]
+    # [0.4, -0.05, 0.04]
     ]

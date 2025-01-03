@@ -6,6 +6,7 @@ import numpy as np
 import torch.functional as F
 from omegaconf import DictConfig
 import hydra
+import time
 
 from .utils import (cosine_beta_schedule,
                     linear_beta_schedule,
@@ -81,6 +82,7 @@ class Diffusion(nn.Module):
         self.diffusion_x_M = diffusion_x_M
 
         self.projector = None
+        self.diffusion_timestep_threshold = 0.1
 
     def get_params(self):
         '''
@@ -162,7 +164,7 @@ class Diffusion(nn.Module):
         nonzero_mask = (1 - (t == 0).float()).reshape(b, *((1,) * (len(x.shape) - 1)))
         return model_mean + nonzero_mask * (0.5 * model_log_variance).exp() * noise
 
-    def p_sample_loop(self, state, goal, shape, verbose=False, return_diffusion=False, constraints=None):
+    def p_sample_loop(self, state, goal, shape, verbose=False, return_diffusion=False, constraint_info=None):
         """
         Main loop for generating samples using the learned model and the inverse diffusion step
 
@@ -172,11 +174,12 @@ class Diffusion(nn.Module):
 
         :return: either the predicted x_0 sample or a list with [x_{t-1}, .., x_{0}]
         """
+        start_time = time.time()
         batch_size = shape[0]
         x = torch.randn(shape, device=self.device)
         # Projection
-        if self.projector is not None:
-            x, costs = self.projector.project(x, state, constraints)
+        if self.projector is not None and self.diffusion_timestep_threshold == 1:
+            x, costs = self.projector.project(x, state, constraint_info)
         if return_diffusion:
             diffusion = [x]
 
@@ -185,8 +188,10 @@ class Diffusion(nn.Module):
             timesteps = torch.full((batch_size,), i, device=self.device, dtype=torch.long)
             x = self.p_sample(x, timesteps, state, goal)
             # Projection
-            if self.projector is not None:
-                x, costs = self.projector.project(x, state, constraints)
+            if self.projector is not None and i + 1 <= self.diffusion_timestep_threshold * self.n_timesteps:
+                projection_start_time = time.time()
+                x, costs = self.projector.project(x, state, constraint_info)
+                print(f"Projection took {time.time() - projection_start_time} seconds, cost: {costs}")
             # if we want to return the complete chain add thee together
             if return_diffusion:
                 diffusion.append(x)
@@ -203,6 +208,7 @@ class Diffusion(nn.Module):
                 if return_diffusion:
                     diffusion.append(x)
 
+        print(f"Diffusion took {time.time() - start_time} seconds")
         if return_diffusion:
             return x, torch.stack(diffusion, dim=1)
         else:
@@ -412,9 +418,13 @@ class Diffusion(nn.Module):
         action = x
         return action.clamp_(self.min_action, self.max_action)
     
-    def create_projector(self, constraints=[], scaler=None, dt=0.1, skip_initial=True):
+    def create_projector(self, constraint_info):
         '''
         Create a projector for the diffusion model
         '''
+        scaler = constraint_info['scaler']
+        constraints = constraint_info['constraints']
+        dt = constraint_info['dt']
+        skip_initial = constraint_info['skip_initial']
         self.projector = Projector(horizon=self.model.action_seq_len, transition_dim=self.action_dim, 
                                    constraint_list=constraints, scaler=scaler, dt=dt, skip_initial=skip_initial)

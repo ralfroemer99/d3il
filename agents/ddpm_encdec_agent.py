@@ -47,7 +47,6 @@ class DiffusionAgent(BaseAgent):
             diffusion_kde_samples: int = 100,
             goal_conditioned: bool = False,
             eval_every_n_epochs: int = 50,
-            projector: bool = False,
     ):
         super().__init__(model, trainset=trainset, valset=valset, train_batch_size=train_batch_size,
                          val_batch_size=val_batch_size, num_workers=num_workers, device=device,
@@ -94,14 +93,6 @@ class DiffusionAgent(BaseAgent):
 
         self.obs_context = deque(maxlen=self.obs_seq_len)
         self.goal_context = deque(maxlen=self.goal_window_size)
-
-        # ------ ADDED -----
-        # Create projector (scaler, action_dim)
-        if projector:
-            self.model.create_projector(self.scaler, constraint_list, dt)
-
-        # Give the model the projector ()
-        # ------ ADDED -----
 
     def train_agent(self):
 
@@ -252,11 +243,14 @@ class DiffusionAgent(BaseAgent):
             self.model.eval()
 
             # do default model evaluation
-            constraints = extra_args['constraints'] if 'constraints' in extra_args else None
-            if constraints is not None and self.model.projector is None:
-                self.model.create_projector(scaler=self.scaler, constraints=constraints, dt=extra_args['dt'], skip_initial=extra_args['skip_initial'])
-            model_pred = self.model(input_state, goal, constraints=constraints)
-
+            # ------ ADDED -----
+            constraint_info = extra_args['constraint_info'] if (extra_args is not None and 'constraint_info' in extra_args) else None
+            if constraint_info is not None and self.model.projector is None:
+                constraint_info['scaler'] = self.scaler
+                self.model.create_projector(constraint_info=constraint_info)
+            model_pred = self.model(input_state, goal, constraint_info=constraint_info)
+            # ------------------
+            
             # restore the previous model parameters
             if self.use_ema:
                 self.ema_helper.restore(self.model.parameters())
@@ -264,11 +258,15 @@ class DiffusionAgent(BaseAgent):
 
             self.curr_action_seq = model_pred
 
-            # Plot current action sequence
-            if extra_args is not None and 'ax' in extra_args:
-                ax = extra_args['ax']
-                x_pred = model_pred[0, :, 0].detach().cpu().numpy()
-                y_pred = model_pred[0, :, 1].detach().cpu().numpy()
+            # Plot current action sequence ------ TODO: Make this properly
+            if extra_args is not None and 'plot_info' in extra_args:
+                ax = extra_args['plot_info']['ax']
+                if 'dims' in extra_args['plot_info']:
+                    x_pred = model_pred[0, :, extra_args['plot_info']['dims'][0]].detach().cpu().numpy()
+                    y_pred = model_pred[0, :, extra_args['plot_info']['dims'][1]].detach().cpu().numpy()
+                elif 'integrate_vel' in extra_args['plot_info']:
+                    x_pred = einops.reduce(input_state[2] + model_pred[0, :, 0], 't -> t', 'sum').detach().cpu().numpy()
+                    y_pred = einops.reduce(input_state[3] + model_pred[0, :, 1], 't -> t', 'sum').detach().cpu().numpy()
                 ax.plot(x_pred, y_pred, 'k')
 
         next_action = self.curr_action_seq[:, self.action_counter, :]
